@@ -1,14 +1,13 @@
 use config::ConfigParser;
-use curl::easy::Easy;
-use ini::Ini;
 use errors::AppError;
 use rust_decimal::Decimal;
 use regex::Regex;
 
-use std::io::Read;
 use std::str;
 use std::str::FromStr;
 
+use yaml_rust::yaml::Hash;
+use yaml_rust::Yaml;
 
 enum HttpMethod {
     GET,
@@ -27,26 +26,35 @@ impl FromStr for HttpMethod {
     }
 }
 
-pub struct HttpProcessor<'a> {
-    url: &'a str,
+pub struct HttpProcessor {
+    url: String,
     method: HttpMethod,
-    payload: Option<&'a str>,
+    payload: Option<Hash>,
     re: Regex,
 }
 
-impl<'a> HttpProcessor<'a> {
+fn yaml_to_str(value: &Yaml) -> Result<String, ()> {
+    match value {
+        Yaml::String(s) => Ok(s.clone()),
+        Yaml::Integer(ref i) => Ok(i.to_string()),
+        _ => Err(()),
+    }
 
-    pub fn from_config<'b: 'a>(conf: &'b Ini) -> Result<Self, AppError> {
-        let parser = ConfigParser::new(conf).section("processing");
-        let url = parser.get("url")?;
+}
+
+impl HttpProcessor {
+
+    pub fn from_config<'b>(conf: &'b ConfigParser) -> Result<Self, AppError> {
+        let cfg_processing = conf.clone().section("processing");
+        let url = cfg_processing.get_str("url")?;
         debug!("url='{}'", url);
-        let regex_str = parser.get("regex")?;
+        let regex_str = cfg_processing.get_str("regex")?;
         debug!("regex='{}'", regex_str);
-        let re = regex::RegexBuilder::new(regex_str).multi_line(true).build()?;
-        let method_str = parser.get_or("method", "GET");
+        let re = regex::RegexBuilder::new(&regex_str).multi_line(true).build()?;
+        let method_str = cfg_processing.get_str_or("method", "GET");
         debug!("method='{}'", method_str);
-        let method = HttpMethod::from_str(method_str)?;
-        let payload = parser.get_or_none("payload");
+        let method = HttpMethod::from_str(&method_str)?;
+        let payload = cfg_processing.get_hash_or_none("payload");
         debug!("payload='{:?}'", payload);
 
         Ok(HttpProcessor{
@@ -62,40 +70,35 @@ impl<'a> HttpProcessor<'a> {
             HttpMethod::POST => self.post(),
             _                => panic!("unsupported method"), /* TODO: support for other http methods */
         }?;
-
-        match self.re.captures(str::from_utf8(&response).unwrap()).unwrap().get(1) {
-            Some(v) => {
-                match Decimal::from_str(v.as_str()) {
-                    Ok(p) => Ok(Some(p)),
-                    _     => Ok(None),
-                }
-            },
-            _ => Ok(None)
-        }
+        self.re
+            .captures(&response)
+            .map_or(
+                Ok(None), |cap|
+                cap.get(1)
+                   .map_or(
+                     Ok(None),
+                     |m| match Decimal::from_str(m.as_str()) {
+                        Ok(price) => Ok(Some(price)),
+                        Err(err) => Err(AppError::from(err))
+                     }
+                   )
+                
+            )
     }
 
-    fn post(&self) -> Result<Vec<u8>, AppError> {
-        let mut easy = Easy::new();
-        easy.url(self.url)?;
-        easy.post(true)?;
-
-        let mut payload = self.payload.unwrap_or("").as_bytes();
-        easy.post_field_size(payload.len() as u64)?;
-
-        let mut output = Vec::new();
-        {
-            let mut transfer = easy.transfer();
-            transfer.read_function(|buf| {
-                Ok(payload.read(buf).unwrap_or(0))
-            })?;
-
-            transfer.write_function(|data| {
-                output.extend_from_slice(data);
-                Ok(data.len())
-            })?;
-
-            transfer.perform()?;
+    fn post(&self) -> Result<String, AppError> {
+        let mut form:Vec<(String, String)> = Vec::new();
+        if let Some(ref payload) = self.payload {
+            for (key, value) in payload {
+                form.push((yaml_to_str(key).unwrap(), yaml_to_str(value).unwrap()));
+            }
         }
-        Ok(output)
+        let mut response = reqwest::Client::new()
+            .post(&self.url)
+            .form(&form)
+            .send()?
+            .error_for_status()?;
+
+        Ok(response.text()?)
     }
 }

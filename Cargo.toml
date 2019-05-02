@@ -1,13 +1,15 @@
 [package]
 name = "price_sniffer"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["ludovic"]
 
 [dependencies]
-curl = "0.4"
+reqwest = "0.9"
+lettre = "0.8"
+lettre_email = "0.8"
 log = { version = "0.4.1", features = ["std"] }
 postgres = "0.15"
 regex = "1"
-rust-ini = "0.13"
+yaml-rust = "0.4"
 rust_decimal = { version = "0.10", features = ["postgres"] }
 simplelog = "^0.5.0"

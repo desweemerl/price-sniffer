@@ -1,11 +1,10 @@
 use config::ConfigParser;
 use errors::AppError;
-use ini::Ini;
 use postgres::{Connection, TlsMode};
 use postgres::params::{Host, ConnectParams};
 use rust_decimal::Decimal;
 
-
+const DEFAULT_DB : &str = "management";
 const SELECT_ACCOUNT_SQL : &str =    "SELECT id FROM accounts WHERE name=$1";
 const SELECT_ITEM_SQL : &str =       "SELECT id FROM items WHERE name=$1";
 const SELECT_LAST_PRICE_SQL : &str = "SELECT price FROM items_prices \
@@ -19,14 +18,14 @@ pub struct Db {
 }
 
 impl Db {
-    pub fn from_config(conf: &Ini) -> Result<Db, AppError> {
-        let parser = ConfigParser::new(conf).section("database");
-        let user = parser.get("user")?;
+    pub fn from_config(conf: &ConfigParser) -> Result<Db, AppError> {
+        let cfg_db = conf.clone().section("database");
+        let user = cfg_db.get_str("user")?;
         let params = ConnectParams::builder()
-            .user(user, parser.get_or_none("password"))
-            .database(parser.get_or("database", "management"))
+            .user(&user, cfg_db.get_str_or_none("password").as_ref().map(String::as_str))
+            .database(&cfg_db.get_str_or("database", DEFAULT_DB))
             .build(
-                parser.get_or_none("host")
+                cfg_db.get_str_or_none("host")
                       .map_or(
                            Host::Tcp("localhost".to_string()),
                            |host| Host::Tcp(host.to_string())

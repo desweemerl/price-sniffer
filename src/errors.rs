@@ -1,5 +1,8 @@
 use std::error::Error;
+use std::io;
 use std::fmt;
+
+use yaml_rust::scanner::ScanError;
 
 
 #[derive(Clone,Debug)]
@@ -8,6 +11,8 @@ pub enum AppError {
     Db(String),
     RegEx(String),
     ParseError(String),
+    Request(String),
+    IoError(String),
 }
 
 impl fmt::Display for AppError {
@@ -17,6 +22,8 @@ impl fmt::Display for AppError {
             AppError::Db(msg)         => write!(f, "DB Error: {}", msg),
             AppError::RegEx(msg)      => write!(f, "RegEx Error: {}", msg),
             AppError::ParseError(msg) => write!(f, "Parse Error: {}", msg),
+            AppError::Request(msg)    => write!(f, "Request Error: {}", msg),
+            AppError::IoError(msg)    => write!(f, "IO Error: {}", msg),
         }
     }
 }
@@ -35,14 +42,26 @@ impl From<regex::Error> for AppError {
     }
 }
 
-impl From<curl::Error> for AppError {
-    fn from(err: curl::Error) -> AppError {
-        AppError::RegEx(err.to_string().clone())
+impl From<rust_decimal::Error> for AppError {
+    fn from(err: rust_decimal::Error) -> AppError {
+        AppError::ParseError(err.to_string().clone())
     }
 }
 
-impl From<ini::ini::Error> for AppError {
-    fn from(err: ini::ini::Error) -> AppError {
+impl From<reqwest::Error> for AppError {
+    fn from(err: reqwest::Error) -> AppError {
+        AppError::Request(err.to_string().clone())
+    }
+}
+
+impl From<io::Error> for AppError {
+    fn from(err: io::Error) -> AppError {
+        AppError::IoError(err.to_string().clone())
+    }
+}
+
+impl From<ScanError> for AppError {
+    fn from(err: ScanError) -> AppError {
         AppError::Config(err.to_string().clone())
     }
 }

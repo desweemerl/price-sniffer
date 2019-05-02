@@ -1,16 +1,15 @@
-extern crate curl;
-extern crate ini;
+extern crate reqwest;
 #[macro_use] extern crate log;
 extern crate simplelog;
 extern crate postgres;
 extern crate regex;
 extern crate rust_decimal;
+extern crate yaml_rust;
 
 use config::ConfigParser;
 use db::Db;
 use errors::AppError;
 use http::HttpProcessor;
-use ini::Ini;
 use simplelog::{Config, LevelFilter, SimpleLogger};
 
 use std::env;
@@ -23,31 +22,33 @@ mod config;
 mod errors;
 
 
-fn run(filename: &str) -> Result<(), AppError> {
-    let config = load_ini(filename)?;
-    if let Some(level_str) = ConfigParser::new(&config).section("log").get_or_none("level") {
-        match LevelFilter::from_str(level_str) {
-            Ok(level) => { SimpleLogger::init(level, Config::default()); },
-            Err(_)    => { return Err(AppError::Config(format!("wrong log level '{}'", level_str))); },
-        }
-    } else {
-        SimpleLogger::init(LevelFilter::Info, Config::default());
+fn run<'a>(filename: &'a str) -> Result<(), AppError> {
+    let cfg = ConfigParser::new(&filename)?;
+    let level_str = cfg.clone().section("log")
+       .get_str_or("level", "info");
+
+    println!("level: {}", level_str);
+
+    let level = LevelFilter::from_str(&level_str)
+       .map_err(|_| AppError::Config(format!("wrong log level")))?;
+
+    SimpleLogger::init(level, Config::default()).unwrap();
+
+    let cfg_processing = cfg.clone().section("processing");
+    let item_name = cfg_processing.get_str("item")?;
+    let account_name = cfg_processing.get_str("account")?;
+    debug!("item name='{}' account name='{}'", item_name, account_name);
+
+    let db = Db::from_config(&cfg)?;
+    let item_id = db.get_item_id(&item_name)?;
+    let account_id = db.get_account_id(&account_name)?;
+    let last_price = db.get_last_price(&item_id, &account_id)?;
+    if let Some(lp) = last_price {
+        debug!("last price='{:?}'", lp);
     }
 
-    let parser = ConfigParser::new(&config).section("processing");
-    let item_name = parser.get("item")?;
-    let account_name = parser.get("account")?;
-    debug!("item name='{}'account name='{}'", item_name, account_name);
-
-    let db = Db::from_config(&config)?;
-    let item_id = db.get_item_id(item_name)?;
-    let account_id = db.get_account_id(account_name)?;
-    let last_price = db.get_last_price(&item_id, &account_id)?;
-    debug!("last price='{:?}'", last_price);
-
-    let http_processor = HttpProcessor::from_config(&config)?;
+    let http_processor = HttpProcessor::from_config(&cfg)?;
     let current_price = http_processor.fetch_price()?;
-
     match current_price {
         Some(cp) => {
             info!("current price: {}", cp);
@@ -60,20 +61,14 @@ fn run(filename: &str) -> Result<(), AppError> {
                     }
                     cp != lp
                 },
-                None => true
+                None     => true,
             } {
                 db.insert_price(&item_id, &account_id, &cp)?;
             }
         },
-        None => {
-            warn!("no price found");
-        }
+        None     => warn!("no price found"),
     }
     Ok(())
-}
-
-fn load_ini(filename: &str) -> Result<Ini, AppError> {
-    Ok(Ini::load_from_file(filename)?)
 }
 
 fn main() {
@@ -85,7 +80,7 @@ fn main() {
             });
         },
         None => {
-            println!("USAGE: price_sniffer <config.ini>");
+            println!("USAGE: price_sniffer <config.yaml>");
             exit(1);
         }
     }
